@@ -1,0 +1,1695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CLAWDUG — OpenClaws Arcade</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+    color: #fff;
+    overflow: hidden;
+  }
+  #header {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    margin-bottom: 12px;
+  }
+  #logo {
+    font-size: 28px;
+    font-weight: 900;
+    letter-spacing: 4px;
+    color: #ff6b00;
+    text-shadow: 0 0 20px #ff6b0088;
+  }
+  #logo span { color: #00d4ff; }
+  #hud {
+    display: flex;
+    gap: 32px;
+    font-size: 14px;
+    color: #aaa;
+  }
+  #hud .val { color: #fff; font-weight: bold; font-size: 16px; }
+  #hud .label { color: #ff6b00; font-size: 11px; letter-spacing: 2px; }
+  #game-wrap {
+    position: relative;
+    border: 2px solid #ff6b0044;
+    box-shadow: 0 0 40px #ff6b0022, inset 0 0 40px #00000088;
+  }
+  canvas { display: block; }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #0a0a0fee;
+    z-index: 10;
+  }
+  #overlay h1 {
+    font-size: 48px;
+    color: #ff6b00;
+    text-shadow: 0 0 30px #ff6b00;
+    letter-spacing: 6px;
+    margin-bottom: 8px;
+  }
+  #overlay h2 {
+    font-size: 16px;
+    color: #00d4ff;
+    letter-spacing: 4px;
+    margin-bottom: 40px;
+  }
+  #overlay .score-display {
+    font-size: 32px;
+    color: #ffd700;
+    margin-bottom: 8px;
+  }
+  #overlay .hi-display {
+    font-size: 14px;
+    color: #aaa;
+    margin-bottom: 40px;
+  }
+  #overlay p {
+    font-size: 14px;
+    color: #888;
+    letter-spacing: 2px;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  #overlay .controls {
+    margin-top: 32px;
+    font-size: 11px;
+    color: #555;
+    text-align: center;
+    line-height: 2;
+  }
+  #leaderboard {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #666;
+    text-align: center;
+    max-width: 480px;
+  }
+  #leaderboard h3 { color: #ff6b00; letter-spacing: 3px; margin-bottom: 6px; font-size: 11px; }
+  #leaderboard .entry { display: flex; justify-content: space-between; padding: 2px 0; }
+  #leaderboard .entry.agent { color: #00d4ff; }
+  #leaderboard .entry.human { color: #ffd700; }
+  #lives-display { display: flex; gap: 6px; }
+  .life-icon { width: 16px; height: 16px; background: #00d4ff; clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="logo">CLAW<span>DUG</span></div>
+  <div id="hud">
+    <div>
+      <div class="label">SCORE</div>
+      <div class="val" id="hud-score">0</div>
+    </div>
+    <div>
+      <div class="label">HI-SCORE</div>
+      <div class="val" id="hud-hi">0</div>
+    </div>
+    <div>
+      <div class="label">ROUND</div>
+      <div class="val" id="hud-round">1</div>
+    </div>
+    <div>
+      <div class="label">LIVES</div>
+      <div id="lives-display"></div>
+    </div>
+  </div>
+</div>
+
+<div id="game-wrap">
+  <canvas id="gameCanvas" width="480" height="560"></canvas>
+  <div id="overlay">
+    <h1>CLAWDUG</h1>
+    <h2>OPENCLAWS ARCADE</h2>
+    <div class="score-display" id="final-score" style="display:none"></div>
+    <div class="hi-display" id="final-hi" style="display:none"></div>
+    <p id="start-msg">PRESS SPACE OR CLICK TO START</p>
+    <div class="controls">
+      ARROW KEYS / WASD — MOVE<br>
+      SPACE / Z — FIRE PUMP<br>
+      HOLD TO INFLATE ENEMIES<br>
+      ROCKS CRUSH EVERYTHING
+    </div>
+  </div>
+</div>
+
+<div id="leaderboard">
+  <h3>🏆 LIVE LEADERBOARD</h3>
+  <div id="lb-entries"></div>
+</div>
+
+<script>
+// ============================================================
+// CLAWDUG — Full Game Engine
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- CONSTANTS ---
+const TILE = 32;
+const COLS = 15;
+const ROWS = 17;  // 1 header row + 16 play rows (dirt + surface)
+const W = COLS * TILE; // 480
+const H = ROWS * TILE; // 544 -> we use 560 canvas, bottom 16px is score bar
+
+// Ground starts at row 1 (row 0 is surface/sky)
+const SURFACE_ROW = 1;
+const DIRT_COLOR   = '#8B4513';
+const TUNNEL_COLOR = '#1a0d00';
+const SKY_COLOR    = '#1a1a2e';
+
+// Enemy types
+const ENEMY_POOKA = 'POOKA';
+const ENEMY_FYGAR = 'FYGAR';
+
+// Game states
+const STATE_TITLE   = 'title';
+const STATE_PLAYING = 'playing';
+const STATE_DYING   = 'dying';
+const STATE_ROUND_END = 'round_end';
+const STATE_GAMEOVER  = 'gameover';
+
+// Directions
+const DIR = { UP: 0, RIGHT: 1, DOWN: 2, LEFT: 3, NONE: -1 };
+const DX = [0, 1, 0, -1];
+const DY = [-1, 0, 1, 0];
+
+// Scoring
+const SCORE_PUMP_HIT   = 200;
+const SCORE_INFLATE_KO = 1000;
+const SCORE_ROCK_KILL  = 1500;
+const SCORE_LEVEL_BONUS = 500;
+
+// ============================================================
+// GRID — tracks tunnels & dirt
+// ============================================================
+class Grid {
+  constructor() { this.reset(); }
+  reset() {
+    this.cells = [];
+    for (let r = 0; r < ROWS; r++) {
+      this.cells[r] = [];
+      for (let c = 0; c < COLS; c++) {
+        this.cells[r][c] = r < SURFACE_ROW ? 'sky' : 'dirt';
+      }
+    }
+  }
+  isDiggable(r, c) {
+    if (r < SURFACE_ROW || r >= ROWS || c < 0 || c >= COLS) return false;
+    return this.cells[r][c] === 'dirt';
+  }
+  isSolid(r, c) {
+    if (c < 0 || c >= COLS) return true;
+    if (r < 0) return false; // can walk on surface
+    if (r >= ROWS) return true;
+    return this.cells[r][c] === 'dirt';
+  }
+  dig(r, c) {
+    if (r >= SURFACE_ROW && r < ROWS && c >= 0 && c < COLS) {
+      this.cells[r][c] = 'tunnel';
+    }
+  }
+  isOpen(r, c) {
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return false;
+    return this.cells[r][c] !== 'dirt';
+  }
+}
+
+// ============================================================
+// PLAYER
+// ============================================================
+class Player {
+  constructor(grid) {
+    this.grid = grid;
+    this.reset();
+  }
+  reset() {
+    this.x = 1 * TILE;
+    this.y = SURFACE_ROW * TILE;
+    this.dir = DIR.RIGHT;
+    this.facingDir = DIR.RIGHT;
+    this.speed = 1.5;
+    this.alive = true;
+    this.pump = null; // active pump beam
+    this.pumpHeld = false;
+    this.pumpCooldown = 0;
+    this.invincible = 0;
+    this.animFrame = 0;
+    this.animTick = 0;
+    // Dig progress tracking for smooth animation
+    this.digProgress = 0;
+  }
+  get tileR() { return Math.round(this.y / TILE); }
+  get tileC() { return Math.round(this.x / TILE); }
+  get cx() { return this.x + TILE / 2; }
+  get cy() { return this.y + TILE / 2; }
+
+  update(keys, enemies, rocks) {
+    if (!this.alive) return;
+    if (this.invincible > 0) this.invincible--;
+    if (this.pumpCooldown > 0) this.pumpCooldown--;
+
+    // Movement
+    let mx = 0, my = 0;
+    if (keys['ArrowLeft']  || keys['KeyA']) { mx = -1; this.dir = DIR.LEFT;  this.facingDir = DIR.LEFT;  }
+    if (keys['ArrowRight'] || keys['KeyD']) { mx =  1; this.dir = DIR.RIGHT; this.facingDir = DIR.RIGHT; }
+    if (keys['ArrowUp']    || keys['KeyW']) { my = -1; this.dir = DIR.UP;    this.facingDir = DIR.UP;    }
+    if (keys['ArrowDown']  || keys['KeyS']) { my =  1; this.dir = DIR.DOWN;  this.facingDir = DIR.DOWN;  }
+
+    // Normalize diagonal (Dig Dug is grid-locked, favor one axis)
+    if (mx !== 0 && my !== 0) { my = 0; }
+
+    // Move and dig
+    if (mx !== 0 || my !== 0) {
+      const nx = this.x + mx * this.speed;
+      const ny = this.y + my * this.speed;
+
+      // Snap to grid alignment on perpendicular axis for clean tunnel creation
+      const snapThreshold = this.speed + 1;
+      if (mx !== 0) {
+        // Moving horizontally — snap Y to tile center
+        const snapY = Math.round(this.y / TILE) * TILE;
+        if (Math.abs(this.y - snapY) < snapThreshold) this.y = snapY;
+        else { this.animTick++; return; } // wait for snap
+      }
+      if (my !== 0) {
+        // Moving vertically — snap X to tile center
+        const snapX = Math.round(this.x / TILE) * TILE;
+        if (Math.abs(this.x - snapX) < snapThreshold) this.x = snapX;
+        else { this.animTick++; return; }
+      }
+
+      // Bounds
+      const clampedX = Math.max(0, Math.min(W - TILE, nx));
+      const clampedY = Math.max(SURFACE_ROW * TILE - TILE / 2, Math.min(H - TILE, ny));
+
+      // Can we move into the target tile?
+      const targetR = Math.floor((clampedY + TILE / 2) / TILE);
+      const targetC = Math.floor((clampedX + TILE / 2) / TILE);
+
+      // Moving into surface row is always ok; dig dirt tiles
+      if (my < 0 && targetR < SURFACE_ROW) {
+        // Emerge to surface
+        this.y = clampedY;
+      } else {
+        this.x = clampedX;
+        this.y = clampedY;
+        // Dig any dirt we pass through
+        const r = Math.floor((this.y + TILE / 2) / TILE);
+        const c = Math.floor((this.x + TILE / 2) / TILE);
+        if (r >= SURFACE_ROW) this.grid.dig(r, c);
+        // Also dig intermediate tiles for smooth movement
+        const prevR = Math.round((this.y - my * this.speed + TILE / 2) / TILE);
+        const prevC = Math.round((this.x - mx * this.speed + TILE / 2) / TILE);
+        if (prevR >= SURFACE_ROW) this.grid.dig(prevR, prevC);
+      }
+      this.animTick++;
+      if (this.animTick % 8 === 0) this.animFrame = (this.animFrame + 1) % 4;
+    }
+
+    // Pump
+    const pumpKey = keys['Space'] || keys['KeyZ'];
+    if (pumpKey && !this.pumpHeld && this.pumpCooldown === 0 && !this.pump) {
+      this.pump = new Pump(this, this.facingDir, this.grid);
+      this.pumpHeld = true;
+    }
+    if (!pumpKey) { this.pumpHeld = false; }
+
+    if (this.pump) {
+      this.pump.update(enemies);
+      if (!pumpKey && this.pump.attached === null) {
+        this.pump = null;
+        this.pumpCooldown = 15;
+      }
+      if (this.pump && this.pump.done) {
+        this.pump = null;
+        this.pumpCooldown = 15;
+      }
+    }
+  }
+
+  draw() {
+    if (!this.alive) return;
+    const flash = this.invincible > 0 && Math.floor(this.invincible / 4) % 2 === 0;
+    if (flash) return;
+
+    ctx.save();
+    ctx.translate(this.cx, this.cy);
+
+    // Flip based on direction
+    if (this.facingDir === DIR.LEFT) ctx.scale(-1, 1);
+    if (this.facingDir === DIR.UP)   ctx.rotate(-Math.PI / 2);
+    if (this.facingDir === DIR.DOWN) ctx.rotate(Math.PI / 2);
+
+    // Body
+    ctx.fillStyle = '#00d4ff';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 11, 11, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Helmet
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(0, -3, 8, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Visor
+    ctx.fillStyle = '#0099cc';
+    ctx.beginPath();
+    ctx.ellipse(2, -3, 5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Goggles
+    ctx.fillStyle = '#001a33';
+    ctx.beginPath();
+    ctx.ellipse(3, -4, 3, 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Legs (animated)
+    const legAnim = this.animFrame;
+    ctx.fillStyle = '#0066aa';
+    if (legAnim % 2 === 0) {
+      ctx.fillRect(-8, 6, 6, 7);
+      ctx.fillRect(2, 6, 6, 7);
+    } else {
+      ctx.fillRect(-8, 6, 6, 5);
+      ctx.fillRect(2, 6, 6, 9);
+    }
+
+    // Backpack pump
+    ctx.fillStyle = '#ff6b00';
+    ctx.fillRect(-12, -4, 5, 8);
+
+    ctx.restore();
+
+    // Draw pump beam
+    if (this.pump) this.pump.draw();
+  }
+}
+
+// ============================================================
+// PUMP BEAM
+// ============================================================
+class Pump {
+  constructor(player, dir, grid) {
+    this.player = player;
+    this.dir = dir;
+    this.grid = grid;
+    this.length = 0;
+    this.maxLength = 5 * TILE;
+    this.attached = null; // enemy being inflated
+    this.pumpCount = 0;   // times pumped on this enemy
+    this.done = false;
+    this.retractTimer = 0;
+  }
+
+  get startX() {
+    const p = this.player;
+    if (this.dir === DIR.LEFT)  return p.cx - 12;
+    if (this.dir === DIR.RIGHT) return p.cx + 12;
+    return p.cx;
+  }
+  get startY() {
+    const p = this.player;
+    if (this.dir === DIR.UP)   return p.cy - 12;
+    if (this.dir === DIR.DOWN) return p.cy + 12;
+    return p.cy;
+  }
+
+  get tipX() { return this.startX + DX[this.dir] * this.length; }
+  get tipY() { return this.startY + DY[this.dir] * this.length; }
+
+  update(enemies) {
+    if (this.attached) {
+      // Pump inflates the enemy
+      const pumpKey = game.keys['Space'] || game.keys['KeyZ'];
+      if (pumpKey) {
+        this.attached.inflate++;
+        if (this.attached.inflate >= this.attached.maxInflate) {
+          this.attached.die('pump');
+          game.addScore(SCORE_INFLATE_KO * this.pumpCount);
+          this.attached = null;
+          this.done = true;
+        }
+      } else {
+        // Let go — enemy slowly deflates
+        this.attached.deflating = true;
+        this.attached = null;
+        this.done = true;
+      }
+      return;
+    }
+
+    if (this.length < this.maxLength) {
+      this.length += 8;
+      // Check for wall collision
+      const tipR = Math.floor(this.tipY / TILE);
+      const tipC = Math.floor(this.tipX / TILE);
+      if (this.grid.isSolid(tipR, tipC)) {
+        this.done = true;
+        return;
+      }
+    } else {
+      this.done = true;
+      return;
+    }
+
+    // Check enemy hit
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const ex = e.x + TILE / 2;
+      const ey = e.y + TILE / 2;
+      const dist = Math.sqrt((ex - this.tipX) ** 2 + (ey - this.tipY) ** 2);
+      if (dist < 18) {
+        this.attached = e;
+        e.pumped = true;
+        e.inflate = 0;
+        e.deflating = false;
+        this.pumpCount++;
+        game.addScore(SCORE_PUMP_HIT);
+        break;
+      }
+    }
+  }
+
+  draw() {
+    if (this.length <= 0) return;
+    ctx.save();
+    // Hose
+    ctx.strokeStyle = '#ff6b00';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 3]);
+    ctx.beginPath();
+    ctx.moveTo(this.startX, this.startY);
+    ctx.lineTo(this.tipX, this.tipY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Nozzle tip
+    ctx.fillStyle = '#ffd700';
+    ctx.beginPath();
+    ctx.arc(this.tipX, this.tipY, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// ENEMY BASE
+// ============================================================
+class Enemy {
+  constructor(grid, r, c, type) {
+    this.grid = grid;
+    this.x = c * TILE;
+    this.y = r * TILE;
+    this.type = type;
+    this.alive = true;
+    this.speed = 0.6 + Math.random() * 0.4;
+    this.dir = DIR.LEFT;
+    this.ghost = false; // can move through dirt when ghosting
+    this.ghostTimer = 0;
+    this.inflate = 0;
+    this.maxInflate = 20;
+    this.pumped = false;
+    this.deflating = false;
+    this.deflateTimer = 0;
+    this.animFrame = 0;
+    this.animTick = 0;
+    this.thinkTimer = 0;
+    this.fireTimer = 0;
+  }
+  get tileR() { return Math.round(this.y / TILE); }
+  get tileC() { return Math.round(this.x / TILE); }
+  get cx() { return this.x + TILE / 2; }
+  get cy() { return this.y + TILE / 2; }
+
+  die(cause) {
+    this.alive = false;
+  }
+
+  update(player, enemies) {
+    if (!this.alive) return;
+
+    // Deflate
+    if (this.deflating) {
+      this.deflateTimer++;
+      this.inflate = Math.max(0, this.inflate - 0.3);
+      if (this.inflate <= 0) { this.deflating = false; this.pumped = false; }
+    }
+
+    // If pumped and not deflating, stay put
+    if (this.pumped && !this.deflating) return;
+
+    this.animTick++;
+    if (this.animTick % 12 === 0) this.animFrame = (this.animFrame + 1) % 2;
+
+    this.thinkTimer--;
+    if (this.thinkTimer <= 0) {
+      this.think(player);
+      this.thinkTimer = 30 + Math.floor(Math.random() * 30);
+    }
+
+    // Ghost mode: occasionally phase through walls
+    this.ghostTimer--;
+    if (this.ghostTimer <= 0) {
+      this.ghost = !this.ghost;
+      this.ghostTimer = this.ghost
+        ? 60 + Math.floor(Math.random() * 90)
+        : 180 + Math.floor(Math.random() * 180);
+    }
+
+    this.move(player);
+  }
+
+  think(player) {
+    // Try to move toward player
+    const pr = player.tileR;
+    const pc = player.tileC;
+    const er = this.tileR;
+    const ec = this.tileC;
+
+    let best = this.dir;
+    let bestDist = Infinity;
+
+    const tryDirs = [DIR.UP, DIR.RIGHT, DIR.DOWN, DIR.LEFT];
+    for (const d of tryDirs) {
+      const nr = er + DY[d];
+      const nc = ec + DX[d];
+      if (!this.ghost && this.grid.isSolid(nr, nc)) continue;
+      if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) continue;
+      const dist = Math.abs(nr - pr) + Math.abs(nc - pc);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = d;
+      }
+    }
+    this.dir = best;
+  }
+
+  move(player) {
+    const nx = this.x + DX[this.dir] * this.speed;
+    const ny = this.y + DY[this.dir] * this.speed;
+    const nr = Math.floor((ny + TILE / 2) / TILE);
+    const nc = Math.floor((nx + TILE / 2) / TILE);
+
+    if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) {
+      this.dir = (this.dir + 2) % 4;
+      return;
+    }
+
+    if (this.ghost || !this.grid.isSolid(nr, nc)) {
+      this.x = Math.max(0, Math.min(W - TILE, nx));
+      this.y = Math.max(SURFACE_ROW * TILE, Math.min(H - TILE, ny));
+    } else {
+      // Try perpendicular
+      const alt = [1, 3].map(d => (this.dir + d) % 4);
+      let moved = false;
+      for (const d of alt) {
+        const ax = this.x + DX[d] * this.speed;
+        const ay = this.y + DY[d] * this.speed;
+        const ar = Math.floor((ay + TILE / 2) / TILE);
+        const ac = Math.floor((ax + TILE / 2) / TILE);
+        if (ar >= 0 && ar < ROWS && ac >= 0 && ac < COLS && !this.grid.isSolid(ar, ac)) {
+          this.x = Math.max(0, Math.min(W - TILE, ax));
+          this.y = Math.max(SURFACE_ROW * TILE, Math.min(H - TILE, ay));
+          this.dir = d;
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) this.dir = (this.dir + 2) % 4;
+    }
+  }
+
+  drawBase(color, eyeColor = '#fff') {
+    const inf = this.inflate / this.maxInflate;
+    const r = 11 + inf * 8;
+
+    ctx.save();
+    ctx.translate(this.cx, this.cy);
+
+    if (this.ghost) {
+      ctx.globalAlpha = 0.5;
+      // Ghost eyes (two dots)
+      ctx.fillStyle = '#88aaff';
+      ctx.beginPath();
+      ctx.arc(-4, -2, 4, 0, Math.PI * 2);
+      ctx.arc(4, -2, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Body
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (this.pumped) {
+        // Inflation lines
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 1;
+        for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * (r - 4), Math.sin(a) * (r - 4));
+          ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+          ctx.stroke();
+        }
+      }
+
+      // Face
+      const faceX = this.dir === DIR.LEFT ? -2 : 2;
+      // Eyes
+      ctx.fillStyle = eyeColor;
+      ctx.beginPath();
+      ctx.arc(faceX - 4, -3, 3, 0, Math.PI * 2);
+      ctx.arc(faceX + 4, -3, 3, 0, Math.PI * 2);
+      ctx.fill();
+      // Pupils
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(faceX - 3, -3, 1.5, 0, Math.PI * 2);
+      ctx.arc(faceX + 5, -3, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Mouth (animated)
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      if (this.animFrame === 0) {
+        ctx.arc(faceX, 3, 4, 0, Math.PI);
+      } else {
+        ctx.arc(faceX, 4, 3, 0, Math.PI);
+      }
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+class Pooka extends Enemy {
+  constructor(grid, r, c) {
+    super(grid, r, c, ENEMY_POOKA);
+    this.color = '#ff4466';
+    this.ghostTimer = 120;
+  }
+  draw() { this.drawBase(this.color, '#fff'); }
+}
+
+class Fygar extends Enemy {
+  constructor(grid, r, c) {
+    super(grid, r, c, ENEMY_FYGAR);
+    this.color = '#22cc44';
+    this.fireTimer = 90 + Math.floor(Math.random() * 60);
+    this.flames = [];
+  }
+  update(player, enemies) {
+    super.update(player, enemies);
+    if (!this.alive) return;
+    this.fireTimer--;
+    if (this.fireTimer <= 0) {
+      this.fireTimer = 120 + Math.floor(Math.random() * 60);
+      // Breathe fire horizontally
+      if (!this.ghost && !this.pumped) {
+        this.flames.push({ x: this.cx, y: this.cy, dir: this.dir, len: 0, maxLen: TILE * 2 });
+      }
+    }
+    // Update flames
+    this.flames = this.flames.filter(f => f.len < f.maxLen);
+    for (const f of this.flames) {
+      f.len += 4;
+      // Check player hit
+      const tipX = f.x + DX[f.dir] * f.len;
+      const tipY = f.y + DY[f.dir] * f.len;
+      const dist = Math.sqrt((tipX - player.cx) ** 2 + (tipY - player.cy) ** 2);
+      if (dist < 16 && player.alive && player.invincible === 0) {
+        game.killPlayer();
+      }
+    }
+  }
+  draw() {
+    this.drawBase(this.color, '#ffffaa');
+    // Flames
+    for (const f of this.flames) {
+      const tipX = f.x + DX[f.dir] * f.len;
+      const tipY = f.y + DY[f.dir] * f.len;
+      const grad = ctx.createLinearGradient(f.x, f.y, tipX, tipY);
+      grad.addColorStop(0, 'rgba(255,200,0,0.9)');
+      grad.addColorStop(0.5, 'rgba(255,80,0,0.8)');
+      grad.addColorStop(1, 'rgba(255,0,0,0)');
+      ctx.save();
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(f.x, f.y);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+// ============================================================
+// ROCK
+// ============================================================
+class Rock {
+  constructor(grid, r, c) {
+    this.grid = grid;
+    this.r = r;
+    this.c = c;
+    this.x = c * TILE;
+    this.y = r * TILE;
+    this.falling = false;
+    this.fallSpeed = 0;
+    this.active = true;
+    this.shakeTimer = 0; // shake when player digs below
+  }
+  get cx() { return this.x + TILE / 2; }
+  get cy() { return this.y + TILE / 2; }
+
+  update(player, enemies, rocks) {
+    if (!this.active) return;
+
+    // Check if player is digging directly below
+    const belowR = Math.floor(this.y / TILE) + 1;
+    const belowC = Math.floor(this.x / TILE);
+    if (!this.falling && this.grid.isOpen(belowR, belowC)) {
+      this.shakeTimer++;
+      if (this.shakeTimer > 20) {
+        this.falling = true;
+        this.shakeTimer = 0;
+      }
+    } else if (!this.falling) {
+      this.shakeTimer = Math.max(0, this.shakeTimer - 1);
+    }
+
+    if (this.falling) {
+      this.fallSpeed = Math.min(this.fallSpeed + 0.4, 6);
+      this.y += this.fallSpeed;
+      const rocR = Math.floor((this.y + TILE) / TILE);
+      const rocC = Math.floor(this.x / TILE);
+
+      // Land on solid ground
+      if (this.grid.isSolid(rocR, rocC) || rocR >= ROWS) {
+        this.y = (rocR - 1) * TILE;
+        this.r = rocR - 1;
+        this.falling = false;
+        this.fallSpeed = 0;
+        // Crush enemies and player
+        this.crushCollisions(player, enemies);
+        return;
+      }
+
+      // Crush during fall
+      this.crushCollisions(player, enemies);
+    }
+  }
+
+  crushCollisions(player, enemies) {
+    // Check player
+    if (player.alive && player.invincible === 0) {
+      const dist = Math.sqrt((player.cx - this.cx) ** 2 + (player.cy - this.cy) ** 2);
+      if (dist < TILE * 0.75) {
+        game.killPlayer();
+      }
+    }
+    // Check enemies
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const dist = Math.sqrt((e.cx - this.cx) ** 2 + (e.cy - this.cy) ** 2);
+      if (dist < TILE * 0.8) {
+        e.die('rock');
+        game.addScore(SCORE_ROCK_KILL);
+      }
+    }
+  }
+
+  draw() {
+    if (!this.active) return;
+    const shake = this.shakeTimer > 0 ? Math.sin(this.shakeTimer * 0.8) * 2 : 0;
+    ctx.save();
+    ctx.translate(this.cx + shake, this.cy);
+
+    // Rock body
+    const grad = ctx.createRadialGradient(-4, -4, 2, 0, 0, 14);
+    grad.addColorStop(0, '#aaa');
+    grad.addColorStop(1, '#555');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, 13, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rock highlights
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.beginPath();
+    ctx.arc(-4, -4, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Cracks
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-2, -8); ctx.lineTo(4, 2);
+    ctx.moveTo(-8, 0); ctx.lineTo(-2, 6);
+    ctx.stroke();
+
+    if (this.falling) {
+      // Speed lines
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 3; i++) {
+        const ox = (i - 1) * 8;
+        ctx.beginPath();
+        ctx.moveTo(ox, 12);
+        ctx.lineTo(ox, 12 + this.fallSpeed * 3);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// SCORE POPUP
+// ============================================================
+class ScorePopup {
+  constructor(x, y, score) {
+    this.x = x; this.y = y;
+    this.score = score;
+    this.life = 60;
+    this.vy = -0.8;
+  }
+  update() { this.y += this.vy; this.life--; }
+  get done() { return this.life <= 0; }
+  draw() {
+    ctx.save();
+    ctx.globalAlpha = this.life / 60;
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 14px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('+' + this.score, this.x, this.y);
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// LEVEL GENERATOR
+// ============================================================
+function generateLevel(round, grid) {
+  grid.reset();
+  const enemies = [];
+  const rocks = [];
+
+  // Place rocks at fixed positions (avoid player spawn area)
+  const rockPositions = [
+    [3, 5], [3, 10], [5, 3], [5, 7], [5, 12],
+    [7, 2], [7, 8], [7, 13], [9, 4], [9, 10],
+    [11, 6], [11, 11], [13, 3], [13, 9], [14, 13]
+  ];
+  for (const [r, c] of rockPositions) {
+    rocks.push(new Rock(grid, r, c));
+  }
+
+  // Enemy count scales with round
+  const pookaCount = 2 + Math.min(round, 4);
+  const fygarCount = 1 + Math.min(Math.floor(round / 2), 3);
+
+  const spawnPositions = [
+    [4, 12], [6, 10], [8, 8], [10, 11], [12, 7],
+    [5, 2],  [7, 5],  [9, 13],[11, 3],  [13, 10]
+  ];
+  let si = 0;
+  for (let i = 0; i < pookaCount && si < spawnPositions.length; i++, si++) {
+    const [r, c] = spawnPositions[si];
+    enemies.push(new Pooka(grid, r, c));
+  }
+  for (let i = 0; i < fygarCount && si < spawnPositions.length; i++, si++) {
+    const [r, c] = spawnPositions[si];
+    enemies.push(new Fygar(grid, r, c));
+  }
+
+  // Pre-dig some tunnels to make the level interesting
+  const tunnels = [
+    [2, 0, DIR.RIGHT, 14], // surface tunnels
+    [4, 0, DIR.RIGHT, 6],
+    [4, 9, DIR.RIGHT, 5],
+    [8, 0, DIR.RIGHT, 14],
+    [12, 0, DIR.RIGHT, 14],
+  ];
+  for (const [r, c, d, len] of tunnels) {
+    for (let i = 0; i < len; i++) {
+      grid.dig(r, c + i);
+    }
+  }
+
+  return { enemies, rocks };
+}
+
+// ============================================================
+// MAIN GAME
+// ============================================================
+class Game {
+  constructor() {
+    this.state = STATE_TITLE;
+    this.grid = new Grid();
+    this.player = new Player(this.grid);
+    this.enemies = [];
+    this.rocks = [];
+    this.popups = [];
+    this.score = 0;
+    this.hiScore = parseInt(localStorage.getItem('clawdug_hi') || '0');
+    this.lives = 3;
+    this.round = 1;
+    this.keys = {};
+    this.roundEndTimer = 0;
+    this.deathTimer = 0;
+    this.frameCount = 0;
+    this.lastScoreAdded = 0;
+
+    this.bindInput();
+    this.initLeaderboard();
+  }
+
+  bindInput() {
+    window.addEventListener('keydown', e => {
+      this.keys[e.code] = true;
+      if (e.code === 'Space') e.preventDefault();
+      if (this.state === STATE_TITLE || this.state === STATE_GAMEOVER) {
+        if (e.code === 'Space') this.startGame();
+      }
+    });
+    window.addEventListener('keyup', e => { this.keys[e.code] = false; });
+    canvas.addEventListener('click', () => {
+      if (this.state === STATE_TITLE || this.state === STATE_GAMEOVER) this.startGame();
+    });
+  }
+
+  startGame() {
+    this.score = 0;
+    this.lives = 3;
+    this.round = 1;
+    this.startRound();
+    this.hideOverlay();
+    this.state = STATE_PLAYING;
+  }
+
+  startRound() {
+    this.grid = new Grid();
+    const { enemies, rocks } = generateLevel(this.round, this.grid);
+    this.player = new Player(this.grid);
+    this.enemies = enemies;
+    this.rocks = rocks;
+    this.popups = [];
+    this.roundEndTimer = 0;
+    this.deathTimer = 0;
+    document.getElementById('hud-round').textContent = this.round;
+  }
+
+  addScore(pts) {
+    this.score += pts;
+    this.lastScoreAdded = pts;
+    if (this.score > this.hiScore) {
+      this.hiScore = this.score;
+      localStorage.setItem('clawdug_hi', this.hiScore);
+    }
+    // Add popup at player position
+    this.popups.push(new ScorePopup(this.player.cx, this.player.cy - 20, pts));
+    document.getElementById('hud-score').textContent = this.score;
+    document.getElementById('hud-hi').textContent = this.hiScore;
+  }
+
+  killPlayer() {
+    if (this.player.invincible > 0) return;
+    this.lives--;
+    this.player.alive = false;
+    this.state = STATE_DYING;
+    this.deathTimer = 120;
+    this.updateLivesDisplay();
+  }
+
+  updateLivesDisplay() {
+    const el = document.getElementById('lives-display');
+    el.innerHTML = '';
+    for (let i = 0; i < this.lives; i++) {
+      const icon = document.createElement('div');
+      icon.className = 'life-icon';
+      el.appendChild(icon);
+    }
+  }
+
+  checkCollisions() {
+    if (!this.player.alive || this.player.invincible > 0) return;
+    for (const e of this.enemies) {
+      if (!e.alive) return;
+      const dist = Math.sqrt((e.cx - this.player.cx) ** 2 + (e.cy - this.player.cy) ** 2);
+      if (dist < 20) {
+        this.killPlayer();
+        return;
+      }
+    }
+  }
+
+  checkRoundEnd() {
+    const allDead = this.enemies.every(e => !e.alive);
+    if (allDead && this.enemies.length > 0) {
+      this.state = STATE_ROUND_END;
+      this.addScore(SCORE_LEVEL_BONUS * this.round);
+      this.roundEndTimer = 120;
+    }
+  }
+
+  hideOverlay() {
+    document.getElementById('overlay').style.display = 'none';
+  }
+
+  showOverlay(gameOver = false) {
+    const overlay = document.getElementById('overlay');
+    overlay.style.display = 'flex';
+    if (gameOver) {
+      document.getElementById('final-score').style.display = 'block';
+      document.getElementById('final-score').textContent = 'SCORE: ' + this.score;
+      document.getElementById('final-hi').style.display = 'block';
+      document.getElementById('final-hi').textContent = 'HI-SCORE: ' + this.hiScore;
+      document.getElementById('start-msg').textContent = 'PRESS SPACE TO PLAY AGAIN';
+      document.querySelector('#overlay h1').textContent = 'GAME OVER';
+      // Submit to leaderboard
+      this.submitScore(this.score);
+    } else {
+      document.getElementById('final-score').style.display = 'none';
+      document.getElementById('final-hi').style.display = 'none';
+      document.getElementById('start-msg').textContent = 'PRESS SPACE OR CLICK TO START';
+      document.querySelector('#overlay h1').textContent = 'CLAWDUG';
+    }
+  }
+
+  update() {
+    this.frameCount++;
+
+    if (this.state === STATE_TITLE || this.state === STATE_GAMEOVER) return;
+
+    if (this.state === STATE_DYING) {
+      this.deathTimer--;
+      if (this.deathTimer <= 0) {
+        if (this.lives <= 0) {
+          this.state = STATE_GAMEOVER;
+          this.showOverlay(true);
+        } else {
+          // Respawn
+          this.player = new Player(this.grid);
+          this.player.invincible = 180;
+          this.state = STATE_PLAYING;
+        }
+      }
+      return;
+    }
+
+    if (this.state === STATE_ROUND_END) {
+      this.roundEndTimer--;
+      if (this.roundEndTimer <= 0) {
+        this.round++;
+        this.startRound();
+        this.state = STATE_PLAYING;
+      }
+      return;
+    }
+
+    // Playing
+    this.player.update(this.keys, this.enemies, this.rocks);
+
+    for (const e of this.enemies) {
+      e.update(this.player, this.enemies);
+    }
+
+    for (const r of this.rocks) {
+      r.update(this.player, this.enemies, this.rocks);
+    }
+
+    this.popups = this.popups.filter(p => !p.done);
+    for (const p of this.popups) p.update();
+
+    this.checkCollisions();
+    this.checkRoundEnd();
+
+    // Speed increase over rounds
+    if (this.frameCount % 1200 === 0) {
+      for (const e of this.enemies) {
+        e.speed = Math.min(e.speed + 0.1, 2.0);
+      }
+    }
+  }
+
+  drawBackground() {
+    // Sky
+    ctx.fillStyle = SKY_COLOR;
+    ctx.fillRect(0, 0, W, SURFACE_ROW * TILE);
+
+    // Stars in sky
+    ctx.fillStyle = '#ffffff44';
+    for (let i = 0; i < 20; i++) {
+      const sx = (i * 137 + 7) % W;
+      const sy = (i * 97 + 3) % (SURFACE_ROW * TILE);
+      ctx.fillRect(sx, sy, 1, 1);
+    }
+
+    // Surface line
+    ctx.fillStyle = '#4a4a00';
+    ctx.fillRect(0, SURFACE_ROW * TILE - 2, W, 4);
+
+    // Draw dirt grid
+    for (let r = SURFACE_ROW; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const cell = this.grid.cells[r][c];
+        if (cell === 'dirt') {
+          // Dirt block
+          const x = c * TILE;
+          const y = r * TILE;
+          const depth = (r - SURFACE_ROW) / (ROWS - SURFACE_ROW);
+          const r2 = Math.floor(139 - depth * 40);
+          const g2 = Math.floor(69 - depth * 30);
+          const b2 = Math.floor(19 - depth * 10);
+          ctx.fillStyle = `rgb(${r2},${g2},${b2})`;
+          ctx.fillRect(x, y, TILE, TILE);
+
+          // Dirt texture
+          ctx.fillStyle = `rgba(${r2 + 20},${g2 + 10},${b2 + 5},0.4)`;
+          for (let t = 0; t < 3; t++) {
+            const tx = x + ((c * 7 + r * 3 + t * 5) % (TILE - 4));
+            const ty = y + ((c * 3 + r * 11 + t * 7) % (TILE - 4));
+            ctx.fillRect(tx, ty, 2, 2);
+          }
+        } else if (cell === 'tunnel') {
+          ctx.fillStyle = TUNNEL_COLOR;
+          ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+        }
+      }
+    }
+
+    // Grid lines (subtle)
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 0.5;
+    for (let r = SURFACE_ROW; r <= ROWS; r++) {
+      ctx.beginPath();
+      ctx.moveTo(0, r * TILE);
+      ctx.lineTo(W, r * TILE);
+      ctx.stroke();
+    }
+    for (let c = 0; c <= COLS; c++) {
+      ctx.beginPath();
+      ctx.moveTo(c * TILE, SURFACE_ROW * TILE);
+      ctx.lineTo(c * TILE, H);
+      ctx.stroke();
+    }
+
+    // Depth color bands
+    const depths = [
+      { start: 3, color: 'rgba(0,0,60,0.05)' },
+      { start: 7, color: 'rgba(0,0,80,0.08)' },
+      { start: 11, color: 'rgba(0,0,100,0.1)' },
+    ];
+    for (const { start, color } of depths) {
+      ctx.fillStyle = color;
+      ctx.fillRect(0, start * TILE, W, (ROWS - start) * TILE);
+    }
+  }
+
+  drawRoundBanner() {
+    if (this.state !== STATE_ROUND_END) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, H / 2 - 40, W, 80);
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 28px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('ROUND ' + this.round + ' CLEAR!', W / 2, H / 2 - 10);
+    ctx.fillStyle = '#aaa';
+    ctx.font = '14px Courier New';
+    ctx.fillText('BONUS: +' + (SCORE_LEVEL_BONUS * this.round), W / 2, H / 2 + 16);
+    ctx.restore();
+  }
+
+  drawDeathEffect() {
+    if (this.state !== STATE_DYING) return;
+    const alpha = Math.sin((120 - this.deathTimer) / 120 * Math.PI) * 0.5;
+    ctx.save();
+    ctx.fillStyle = `rgba(255,0,0,${alpha})`;
+    ctx.fillRect(0, 0, W, H);
+    // Draw X at player last position
+    ctx.strokeStyle = '#ff0000';
+    ctx.lineWidth = 4;
+    const px = this.player.x + TILE / 2;
+    const py = this.player.y + TILE / 2;
+    const size = 20 - this.deathTimer / 10;
+    ctx.beginPath();
+    ctx.moveTo(px - size, py - size); ctx.lineTo(px + size, py + size);
+    ctx.moveTo(px + size, py - size); ctx.lineTo(px - size, py + size);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  draw() {
+    ctx.clearRect(0, 0, W, H);
+    this.drawBackground();
+
+    for (const r of this.rocks) r.draw();
+    this.player.draw();
+    for (const e of this.enemies) e.alive && e.draw();
+    for (const p of this.popups) p.draw();
+
+    this.drawRoundBanner();
+    this.drawDeathEffect();
+
+    // Scan line effect
+    for (let y = 0; y < H; y += 4) {
+      ctx.fillStyle = 'rgba(0,0,0,0.03)';
+      ctx.fillRect(0, y, W, 2);
+    }
+  }
+
+  // ============================================================
+  // LEADERBOARD (localStorage + simulated network scores)
+  // ============================================================
+  initLeaderboard() {
+    this.lbScores = JSON.parse(localStorage.getItem('clawdug_lb') || '[]');
+    // Seed with demo scores if empty
+    if (this.lbScores.length === 0) {
+      this.lbScores = [
+        { name: 'Pooka-7 [AGENT]', score: 42800, type: 'agent' },
+        { name: 'ClawBot-3 [AGENT]', score: 31200, type: 'agent' },
+        { name: 'dutchiono', score: 18500, type: 'human' },
+        { name: 'DugMaster', score: 12000, type: 'human' },
+        { name: 'RockCrush-AI [AGENT]', score: 9800, type: 'agent' },
+      ];
+    }
+    this.renderLeaderboard();
+  }
+
+  submitScore(score) {
+    if (score === 0) return;
+    this.lbScores.push({ name: 'dutchiono', score, type: 'human' });
+    this.lbScores.sort((a, b) => b.score - a.score);
+    this.lbScores = this.lbScores.slice(0, 10);
+    localStorage.setItem('clawdug_lb', JSON.stringify(this.lbScores));
+    this.renderLeaderboard();
+  }
+
+  renderLeaderboard() {
+    const el = document.getElementById('lb-entries');
+    el.innerHTML = '';
+    this.lbScores.slice(0, 8).forEach((entry, i) => {
+      const div = document.createElement('div');
+      div.className = 'entry ' + entry.type;
+      div.innerHTML = `<span>#${i + 1} ${entry.name}</span><span>${entry.score.toLocaleString()}</span>`;
+      el.appendChild(div);
+    });
+  }
+
+  // ============================================================
+  // AGENT API — exported game state for OpenClaws agents
+  // ============================================================
+  getAgentState() {
+    return {
+      frame: this.frameCount,
+      score: this.score,
+      lives: this.lives,
+      round: this.round,
+      player: {
+        x: this.player.x, y: this.player.y,
+        tileR: this.player.tileR, tileC: this.player.tileC,
+        dir: this.player.facingDir,
+        alive: this.player.alive,
+        invincible: this.player.invincible > 0,
+        hasPump: !!this.player.pump
+      },
+      enemies: this.enemies.map(e => ({
+        type: e.type, x: e.x, y: e.y,
+        tileR: e.tileR, tileC: e.tileC,
+        alive: e.alive, ghost: e.ghost,
+        pumped: e.pumped, inflate: e.inflate
+      })),
+      rocks: this.rocks.map(r => ({
+        r: r.r, c: r.c, x: r.x, y: r.y,
+        falling: r.falling, active: r.active
+      })),
+      grid: this.grid.cells.map(row => row.map(c => c === 'dirt' ? 1 : 0)),
+      actions: ['move_up','move_down','move_left','move_right','fire_pump','release_pump']
+    };
+  }
+
+  run() {
+    const loop = () => {
+      this.update();
+      this.draw();
+      requestAnimationFrame(loop);
+    };
+    this.showOverlay(false);
+    this.updateLivesDisplay();
+    loop();
+  }
+}
+
+// ============================================================
+// WEB3 INTEGRATION LAYER
+// ============================================================
+const WEB3 = {
+  // Contract addresses (Base mainnet — update after deploy)
+  GAME_CONTRACT:  '0x0000000000000000000000000000000000000000',
+  DUG_TOKEN:      '0x0000000000000000000000000000000000000000',
+  REGISTRY:       '0x0000000000000000000000000000000000000000',
+  CHAIN_ID:       8453,
+  CHAIN_NAME:     'Base',
+  RPC_URL:        'https://mainnet.base.org',
+  API_URL:        'http://localhost:3847',
+
+  // Minimal ABIs for browser use
+  GAME_ABI: [
+    'function submitScore(uint256 score,uint256 round,uint256 kills,bytes32 sessionId,uint256 signedAt,bytes calldata signature) external',
+    'function getHumanLeaderboard() external view returns (tuple(address player,uint256 score,uint256 round,uint256 kills,bool isAgent,uint256 timestamp,bytes32 sessionId)[20])',
+    'function getAgentLeaderboard() external view returns (tuple(address player,uint256 score,uint256 round,uint256 kills,bool isAgent,uint256 timestamp,bytes32 sessionId)[20])',
+    'function getCurrentEpoch() external view returns (tuple(uint256 id,uint256 startTime,uint256 endTime,uint256 prizePool,uint256 burnAmount,uint256 treasuryAmount,bool settled,address humanWinner,address agentWinner,uint256 humanTopScore,uint256 agentTopScore))',
+  ],
+  DUG_ABI: [
+    'function balanceOf(address) external view returns (uint256)',
+    'function approve(address spender,uint256 amount) external returns (bool)',
+    'function allowance(address owner,address spender) external view returns (uint256)',
+  ],
+
+  provider:  null,
+  signer:    null,
+  address:   null,
+  sessionId: null,
+  connected: false,
+
+  async init() {
+    // Try to restore session
+    this.sessionId = localStorage.getItem('clawdug_session');
+    const savedAddr = localStorage.getItem('clawdug_wallet');
+    if (savedAddr) {
+      this.address = savedAddr;
+      this._updateWalletUI();
+    }
+    this._buildWeb3UI();
+    this._startEpochTimer();
+    await this._loadLeaderboardFromAPI();
+  },
+
+  _buildWeb3UI() {
+    // Inject wallet bar above game
+    const header = document.getElementById('header');
+    const bar = document.createElement('div');
+    bar.id = 'web3-bar';
+    bar.style.cssText = 'display:flex;gap:12px;align-items:center;margin-bottom:8px;font-size:12px;';
+    bar.innerHTML = `
+      <button id="btn-connect" onclick="WEB3.connectWallet()" style="
+        background:#ff6b00;color:#000;border:none;padding:6px 16px;
+        font-family:inherit;font-weight:bold;letter-spacing:2px;cursor:pointer;
+        font-size:11px;">CONNECT WALLET</button>
+      <span id="wallet-addr" style="color:#555;font-size:11px;"></span>
+      <span id="dug-balance" style="color:#ffd700;font-size:11px;"></span>
+      <span id="epoch-timer" style="color:#00d4ff;font-size:11px;margin-left:auto;"></span>
+      <span id="prize-pool" style="color:#44ff88;font-size:11px;"></span>
+    `;
+    document.body.insertBefore(bar, document.getElementById('game-wrap'));
+  },
+
+  async connectWallet() {
+    if (!window.ethereum) {
+      alert('No wallet detected. Install MetaMask or Coinbase Wallet.');
+      return;
+    }
+    try {
+      // Request accounts
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      this.address = accounts[0];
+
+      // Switch to Base
+      try {
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x' + this.CHAIN_ID.toString(16) }],
+        });
+      } catch (switchErr) {
+        if (switchErr.code === 4902) {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: '0x' + this.CHAIN_ID.toString(16),
+              chainName: this.CHAIN_NAME,
+              nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+              rpcUrls: [this.RPC_URL],
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
+          });
+        }
+      }
+
+      // Register with API
+      const res = await fetch(`${this.API_URL}/agent/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 'human:' + this.address.slice(2, 10),
+          name:    this.address.slice(0, 6) + '...' + this.address.slice(-4),
+          wallet:  this.address,
+          isAgent: false,
+        }),
+      }).then(r => r.json()).catch(() => ({ ok: false }));
+
+      if (res.ok) {
+        this.sessionId = res.sessionId;
+        localStorage.setItem('clawdug_session', this.sessionId);
+        localStorage.setItem('clawdug_wallet', this.address);
+      }
+
+      this.connected = true;
+      this._updateWalletUI();
+      await this._updateDugBalance();
+
+      console.log('[Web3] Connected:', this.address);
+    } catch (err) {
+      console.error('[Web3] Connect error:', err);
+    }
+  },
+
+  _updateWalletUI() {
+    const btn  = document.getElementById('btn-connect');
+    const addr = document.getElementById('wallet-addr');
+    if (!btn || !addr) return;
+    if (this.address) {
+      btn.textContent = 'CONNECTED';
+      btn.style.background = '#00d4ff';
+      addr.textContent = this.address.slice(0, 6) + '...' + this.address.slice(-4);
+      addr.style.color = '#00d4ff';
+    }
+  },
+
+  async _updateDugBalance() {
+    if (!this.address) return;
+    try {
+      const res = await fetch(`${this.API_URL}/token?address=${this.address}`).then(r => r.json());
+      const el = document.getElementById('dug-balance');
+      if (el && res.balance) {
+        el.textContent = parseFloat(res.balance).toFixed(1) + ' $DUG';
+      }
+    } catch {}
+  },
+
+  // Called by game when player dies or completes a round
+  async syncScore(score, kills, round) {
+    if (!this.sessionId) return;
+    try {
+      await fetch(`${this.API_URL}/agent/update-score`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: this.sessionId, score, kills, round }),
+      });
+    } catch {}
+  },
+
+  // Called on game over — get server signature and submit on-chain
+  async submitFinalScore(score, kills, round) {
+    if (!this.sessionId || !this.address || score === 0) return;
+    try {
+      // 1. Sync final score to server
+      await this.syncScore(score, kills, round);
+
+      // 2. Get signed payload from server
+      const res = await fetch(`${this.API_URL}/agent/submit-score`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: this.sessionId }),
+      }).then(r => r.json());
+
+      if (!res.ok) return;
+
+      // 3. If mock mode, just refresh leaderboard
+      if (res.mock) {
+        console.log('[Web3] Mock score submitted:', score);
+        game.submitScore(score);
+        await this._loadLeaderboardFromAPI();
+        return;
+      }
+
+      // 4. Submit on-chain with player's wallet
+      if (!window.ethereum) return;
+      const provider = new window.ethers?.BrowserProvider?.(window.ethereum);
+      if (!provider) return;
+      const signer = await provider.getSigner();
+      const contract = new window.ethers.Contract(this.GAME_CONTRACT, this.GAME_ABI, signer);
+      const { payload } = res;
+      const tx = await contract.submitScore(
+        payload.score, payload.round, payload.kills,
+        payload.sessionId, payload.signedAt, payload.signature
+      );
+      await tx.wait();
+      console.log('[Web3] Score submitted on-chain:', tx.hash);
+      this._showTxNotice(tx.hash);
+      await this._updateDugBalance();
+      await this._loadLeaderboardFromAPI();
+    } catch (err) {
+      console.warn('[Web3] Score submit error:', err.message);
+      // Still update local leaderboard on failure
+      game.submitScore(score);
+      await this._loadLeaderboardFromAPI();
+    }
+  },
+
+  async _loadLeaderboardFromAPI() {
+    try {
+      const res = await fetch(`${this.API_URL}/leaderboard`).then(r => r.json());
+      if (!res.ok) return;
+
+      // Merge on-chain scores into local leaderboard
+      const all = [
+        ...(res.agents || []).map(e => ({ ...e, type: 'agent', name: e.player ? e.player.slice(0,6)+'...' : 'Agent' })),
+        ...(res.humans || []).map(e => ({ ...e, type: 'human', name: e.player ? e.player.slice(0,6)+'...' : 'Human' })),
+      ].sort((a, b) => b.score - a.score);
+
+      if (all.length > 0) {
+        game.lbScores = all.slice(0, 10).map(e => ({
+          name:  e.name,
+          score: e.score,
+          type:  e.type,
+        }));
+        game.renderLeaderboard();
+      }
+
+      // Update epoch display
+      if (res.epoch) {
+        const ep = res.epoch;
+        const pool = document.getElementById('prize-pool');
+        if (pool) pool.textContent = `PRIZE: ${parseFloat(ep.prizePool || 0).toFixed(0)} $DUG`;
+      }
+    } catch {}
+  },
+
+  _startEpochTimer() {
+    const update = async () => {
+      try {
+        const res = await fetch(`${this.API_URL}/epoch`).then(r => r.json()).catch(() => null);
+        const el  = document.getElementById('epoch-timer');
+        if (!el) return;
+        const secs = res?.epoch?.endsIn || 0;
+        if (secs <= 0) { el.textContent = 'EPOCH ENDING...'; return; }
+        const h = Math.floor(secs / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const s = secs % 60;
+        el.textContent = `EPOCH: ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+      } catch {}
+    };
+    update();
+    setInterval(update, 5000);
+  },
+
+  _showTxNotice(hash) {
+    const notice = document.createElement('div');
+    notice.style.cssText = `
+      position:fixed;bottom:20px;right:20px;background:#001a00;border:1px solid #44ff88;
+      color:#44ff88;padding:12px 20px;font-family:monospace;font-size:12px;z-index:9999;
+      max-width:320px;line-height:1.6;
+    `;
+    notice.innerHTML = `
+      SCORE SUBMITTED ON-CHAIN<br>
+      <a href="https://basescan.org/tx/${hash}" target="_blank"
+         style="color:#00d4ff;word-break:break-all;">${hash.slice(0,20)}...</a>
+    `;
+    document.body.appendChild(notice);
+    setTimeout(() => notice.remove(), 8000);
+  },
+};
+
+// ============================================================
+// BOOT
+// ============================================================
+const game = new Game();
+game.run();
+
+// Hook Web3 into game lifecycle
+const _origAddScore = game.addScore.bind(game);
+game.addScore = function(pts) {
+  _origAddScore(pts);
+};
+
+const _origShowOverlay = game.showOverlay.bind(game);
+game.showOverlay = function(gameOver) {
+  _origShowOverlay(gameOver);
+  if (gameOver && game.score > 0) {
+    // Count kills from enemies that died
+    const kills = game.enemies ? game.enemies.filter(e => !e.alive).length : 0;
+    WEB3.submitFinalScore(game.score, kills, game.round);
+  }
+};
+
+// Init Web3 after game boots
+WEB3.init().catch(console.warn);
+
+// Load ethers from CDN for browser use (optional — degrades gracefully without it)
+(function() {
+  const s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/ethers/6.9.0/ethers.umd.min.js';
+  s.onload = () => console.log('[Web3] ethers.js loaded');
+  document.head.appendChild(s);
+})();
+
+// Expose agent API globally
+window.ClawDugAPI = {
+  getState: () => game.getAgentState(),
+  sendAction: (action) => {
+    const keyMap = {
+      'move_up':    { down: 'ArrowUp',    up: 'ArrowUp' },
+      'move_down':  { down: 'ArrowDown',  up: 'ArrowDown' },
+      'move_left':  { down: 'ArrowLeft',  up: 'ArrowLeft' },
+      'move_right': { down: 'ArrowRight', up: 'ArrowRight' },
+      'fire_pump':  { down: 'Space',      up: null },
+      'release_pump':{ down: null,        up: 'Space' }
+    };
+    const map = keyMap[action];
+    if (!map) return { error: 'unknown action' };
+    if (map.down) game.keys[map.down] = true;
+    if (map.up)   game.keys[map.up] = false;
+    setTimeout(() => {
+      if (map.down) game.keys[map.down] = false;
+    }, 100);
+    return { ok: true, action };
+  },
+  getScore: () => game.score,
+  isGameOver: () => game.state === STATE_GAMEOVER,
+};
+
+console.log('%cCLAWDUG Agent API ready. Use ClawDugAPI.getState() and ClawDugAPI.sendAction()', 'color: #ff6b00; font-weight: bold;');
+</script>
+</body>
+</html>
